@@ -89,9 +89,9 @@ void WiFiManager::setupConfigPortal() {
   }
 
   //optional soft ip config
-  if (_ap_static_ip) {
+  if (_config.ap_static_ip) {
     DEBUG_WM(F("Custom AP IP/GW/Subnet"));
-    WiFi.softAPConfig(_ap_static_ip, _ap_static_gw, _ap_static_sn);
+    WiFi.softAPConfig(_config.ap_static_ip, _config.ap_static_gw, _config.ap_static_sn);
   }
 
   if (_apPassword != NULL) {
@@ -117,10 +117,27 @@ void WiFiManager::setupConfigPortal() {
   server->on("/r", std::bind(&WiFiManager::handleReset, this));
   server->on("/generate_204", std::bind(&WiFiManager::handle204, this));  //Android/Chrome OS captive portal check.
   server->on("/fwlink", std::bind(&WiFiManager::handleRoot, this));  //Microsoft captive portal. Maybe not needed. Might be handled by notFound handler.
+  server->on("/adhoc", std::bind(&WiFiManager::handleAdHoc, this));  //Microsoft captive portal. Maybe not needed. Might be handled by notFound handler.
   server->onNotFound (std::bind(&WiFiManager::handleNotFound, this));
   server->begin(); // Web server start
   DEBUG_WM(F("HTTP server started"));
 
+}
+
+void WiFiManager::handleAdHoc()
+{
+  String page = FPSTR(HTTP_HEAD);
+  page.replace("{v}", "Info");
+  page += FPSTR(HTTP_SCRIPT);
+  page += FPSTR(HTTP_STYLE);
+  page += _customHeadElement;
+  page += FPSTR(HTTP_HEAD_END);
+  page += FPSTR(HTTP_ADHOC);
+  page += FPSTR(HTTP_END);
+
+  server->send(200, "text/html", page);
+
+  _config.stayAdHoc = true;
 }
 
 boolean WiFiManager::autoConnect() {
@@ -162,23 +179,17 @@ boolean  WiFiManager::startConfigPortal(char const *apName, char const *apPasswo
     _apcallback(this);
   }
 
-  connect = false;
   setupConfigPortal();
 
-  while (_configPortalTimeout == 0 || millis() < _configPortalStart + _configPortalTimeout) {
-    //DNS
-    dnsServer->processNextRequest();
-    //HTTP
-    server->handleClient();
-
-
-    if (connect) {
-      connect = false;
-      delay(2000);
-      DEBUG_WM(F("Connecting to new AP"));
+  while (_configPortalTimeout == 0 || millis() < _configPortalStart + _configPortalTimeout)
+  {
+    if (_config.connect)
+    {
+      _config.connect = false;
+      delay(2000);      DEBUG_WM(F("Connecting to new AP"));
 
       // using user-provided  _ssid, _pass in place of system-stored ssid and pass
-      if (connectWifi(_ssid, _pass) != WL_CONNECTED) {
+      if (connectWifi(_config.ssid, _config.pass) != WL_CONNECTED) {
         DEBUG_WM(F("Failed to connect."));
       } else {
         //connected
@@ -186,7 +197,7 @@ boolean  WiFiManager::startConfigPortal(char const *apName, char const *apPasswo
         //notify that configuration has changed and any optional parameters should be saved
         if ( _savecallback != NULL) {
           //todo: check if any custom parameters actually exist, and check if they really changed maybe
-          _savecallback();
+          _savecallback(_config);
         }
         break;
       }
@@ -196,11 +207,29 @@ boolean  WiFiManager::startConfigPortal(char const *apName, char const *apPasswo
         //notify that configuration has changed and any optional parameters should be saved
         if ( _savecallback != NULL) {
           //todo: check if any custom parameters actually exist, and check if they really changed maybe
-          _savecallback();
+          _savecallback(_config);
         }
         break;
       }
     }
+    else if(_config.stayAdHoc)
+    {
+      if (_shouldBreakAfterConfig) {
+        //flag set to exit after config after trying to connect
+        //notify that configuration has changed and any optional parameters should be saved
+        if ( _savecallback != NULL) {
+          //todo: check if any custom parameters actually exist, and check if they really changed maybe
+          _savecallback(_config);
+        }
+        break;
+      }
+    }
+
+    //DNS
+    dnsServer->processNextRequest();
+    //HTTP
+    server->handleClient();
+
     yield();
   }
 
@@ -215,9 +244,9 @@ int WiFiManager::connectWifi(String ssid, String pass) {
   DEBUG_WM(F("Connecting as wifi client..."));
 
   // check if we've got static_ip settings, if we do, use those.
-  if (_sta_static_ip) {
+  if (_config.sta_static_ip) {
     DEBUG_WM(F("Custom STA IP/GW/Subnet"));
-    WiFi.config(_sta_static_ip, _sta_static_gw, _sta_static_sn);
+    WiFi.config(_config.sta_static_ip, _config.sta_static_gw, _config.sta_static_sn);
     DEBUG_WM(WiFi.localIP());
   }
   //fix for auto connect racing issue
@@ -235,7 +264,7 @@ int WiFiManager::connectWifi(String ssid, String pass) {
       ETS_UART_INTR_DISABLE();
       wifi_station_disconnect();
       ETS_UART_INTR_ENABLE();
-        
+
       WiFi.begin();
     } else {
       DEBUG_WM("No saved credentials");
@@ -330,15 +359,15 @@ void WiFiManager::setDebugOutput(boolean debug) {
 }
 
 void WiFiManager::setAPStaticIPConfig(IPAddress ip, IPAddress gw, IPAddress sn) {
-  _ap_static_ip = ip;
-  _ap_static_gw = gw;
-  _ap_static_sn = sn;
+  _config.ap_static_ip = ip;
+  _config.ap_static_gw = gw;
+  _config.ap_static_sn = sn;
 }
 
 void WiFiManager::setSTAStaticIPConfig(IPAddress ip, IPAddress gw, IPAddress sn) {
-  _sta_static_ip = ip;
-  _sta_static_gw = gw;
-  _sta_static_sn = sn;
+  _config.sta_static_ip = ip;
+  _config.sta_static_gw = gw;
+  _config.sta_static_sn = sn;
 }
 
 void WiFiManager::setMinimumSignalQuality(int quality) {
@@ -475,14 +504,14 @@ void WiFiManager::handleWifi(boolean scan) {
     page += "<br/>";
   }
 
-  if (_sta_static_ip) {
+  if (_config.sta_static_ip) {
 
     String item = FPSTR(HTTP_FORM_PARAM);
     item.replace("{i}", "ip");
     item.replace("{n}", "ip");
     item.replace("{p}", "Static IP");
     item.replace("{l}", "15");
-    item.replace("{v}", _sta_static_ip.toString());
+    item.replace("{v}", _config.sta_static_ip.toString());
 
     page += item;
 
@@ -491,7 +520,7 @@ void WiFiManager::handleWifi(boolean scan) {
     item.replace("{n}", "gw");
     item.replace("{p}", "Static Gateway");
     item.replace("{l}", "15");
-    item.replace("{v}", _sta_static_gw.toString());
+    item.replace("{v}", _config.sta_static_gw.toString());
 
     page += item;
 
@@ -500,7 +529,7 @@ void WiFiManager::handleWifi(boolean scan) {
     item.replace("{n}", "sn");
     item.replace("{p}", "Subnet");
     item.replace("{l}", "15");
-    item.replace("{v}", _sta_static_sn.toString());
+    item.replace("{v}", _config.sta_static_sn.toString());
 
     page += item;
 
@@ -523,8 +552,8 @@ void WiFiManager::handleWifiSave() {
   DEBUG_WM(F("WiFi save"));
 
   //SAVE/connect here
-  _ssid = server->arg("s").c_str();
-  _pass = server->arg("p").c_str();
+  _config.ssid = server->arg("s").c_str();
+  _config.pass = server->arg("p").c_str();
 
   //parameters
   for (int i = 0; i < _paramsCount; i++) {
@@ -545,19 +574,19 @@ void WiFiManager::handleWifiSave() {
     DEBUG_WM(server->arg("ip"));
     //_sta_static_ip.fromString(server->arg("ip"));
     String ip = server->arg("ip");
-    optionalIPFromString(&_sta_static_ip, ip.c_str());
+    optionalIPFromString(&_config.sta_static_ip, ip.c_str());
   }
   if (server->arg("gw") != "") {
     DEBUG_WM(F("static gateway"));
     DEBUG_WM(server->arg("gw"));
     String gw = server->arg("gw");
-    optionalIPFromString(&_sta_static_gw, gw.c_str());
+    optionalIPFromString(&_config.sta_static_gw, gw.c_str());
   }
   if (server->arg("sn") != "") {
     DEBUG_WM(F("static netmask"));
     DEBUG_WM(server->arg("sn"));
     String sn = server->arg("sn");
-    optionalIPFromString(&_sta_static_sn, sn.c_str());
+    optionalIPFromString(&_config.sta_static_sn, sn.c_str());
   }
 
   String page = FPSTR(HTTP_HEAD);
@@ -573,7 +602,12 @@ void WiFiManager::handleWifiSave() {
 
   DEBUG_WM(F("Sent wifi save page"));
 
-  connect = true; //signal ready to connect/reset
+  _config.connect = true; //signal ready to connect/reset
+}
+
+WiFiManagerConfig& WiFiManager::config()
+{
+  return _config;
 }
 
 /** Handle the info page */
@@ -688,8 +722,8 @@ void WiFiManager::setAPCallback( void (*func)(WiFiManager* myWiFiManager) ) {
 }
 
 //start up save config callback
-void WiFiManager::setSaveConfigCallback( void (*func)(void) ) {
-  _savecallback = func;
+void WiFiManager::setSaveConfigCallback(_save_callback_t cb ) {
+  _savecallback = cb;
 }
 
 //sets a custom element to add to head, like a new style tag

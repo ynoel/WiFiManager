@@ -14,8 +14,10 @@
 #define WiFiManager_h
 
 #include <ESP8266WiFi.h>
-#include <ESP8266WebServer.h>
 #include <DNSServer.h>
+#include <ESP8266WebServer.h>
+
+
 #include <memory>
 #undef min
 #undef max
@@ -29,7 +31,7 @@ const char HTTP_HEAD[] PROGMEM            = "<!DOCTYPE html><html lang=\"en\"><h
 const char HTTP_STYLE[] PROGMEM           = "<style>.c{text-align: center;} div,input{padding:5px;font-size:1em;} input{width:95%;} body{text-align: center;font-family:verdana;} button{border:0;border-radius:0.3rem;background-color:#1fa3ec;color:#fff;line-height:2.4rem;font-size:1.2rem;width:100%;} .q{float: right;width: 64px;text-align: right;} .l{background: url(\"data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAALVBMVEX///8EBwfBwsLw8PAzNjaCg4NTVVUjJiZDRUUUFxdiZGSho6OSk5Pg4eFydHTCjaf3AAAAZElEQVQ4je2NSw7AIAhEBamKn97/uMXEGBvozkWb9C2Zx4xzWykBhFAeYp9gkLyZE0zIMno9n4g19hmdY39scwqVkOXaxph0ZCXQcqxSpgQpONa59wkRDOL93eAXvimwlbPbwwVAegLS1HGfZAAAAABJRU5ErkJggg==\") no-repeat left center;background-size: 1em;}</style>";
 const char HTTP_SCRIPT[] PROGMEM          = "<script>function c(l){document.getElementById('s').value=l.innerText||l.textContent;document.getElementById('p').focus();}</script>";
 const char HTTP_HEAD_END[] PROGMEM        = "</head><body><div style='text-align:left;display:inline-block;min-width:260px;'>";
-const char HTTP_PORTAL_OPTIONS[] PROGMEM  = "<form action=\"/wifi\" method=\"get\"><button>Configure WiFi</button></form><br/><form action=\"/0wifi\" method=\"get\"><button>Configure WiFi (No Scan)</button></form><br/><form action=\"/i\" method=\"get\"><button>Info</button></form><br/><form action=\"/r\" method=\"post\"><button>Reset</button></form>";
+const char HTTP_PORTAL_OPTIONS[] PROGMEM  = "<form action=\"/wifi\" method=\"get\"><button>Configure WiFi</button></form><br/><form action=\"/0wifi\" method=\"get\"><button>Configure WiFi (No Scan)</button></form><br/><form action=\"/i\" method=\"get\"><button>Info</button></form><br/><form action=\"/r\" method=\"post\"><button>Reset</button></form><br/><form action=\"/adhoc\" method=\"post\"><button>Use AdHoc Network</button></form>";
 const char HTTP_ITEM[] PROGMEM            = "<div><a href='#p' onclick='c(this)'>{v}</a>&nbsp;<span class='q {i}'>{r}%</span></div>";
 //const char HTTP_ITEM_PADLOCK[] PROGMEM = "<img src='data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAMAAABEpIrGAAAALVBMVEX///8EBwfBwsLw8PAzNjaCg4NTVVUjJiZDRUUUFxdiZGSho6OSk5Pg4eFydHTCjaf3AAAAZElEQVQ4je2NSw7AIAhEBamKn97/uMXEGBvozkWb9C2Zx4xzWykBhFAeYp9gkLyZE0zIMno9n4g19hmdY39scwqVkOXaxph0ZCXQcqxSpgQpONa59wkRDOL93eAXvimwlbPbwwVAegLS1HGfZAAAAABJRU5ErkJggg==' width='13px'/>";
 const char HTTP_FORM_START[] PROGMEM      = "<form method='get' action='wifisave'><input id='s' name='s' length=32 placeholder='SSID'><br/><input id='p' name='p' length=64 type='password' placeholder='password'><br/>";
@@ -37,6 +39,7 @@ const char HTTP_FORM_PARAM[] PROGMEM      = "<br/><input id='{i}' name='{n}' len
 const char HTTP_FORM_END[] PROGMEM        = "<br/><button type='submit'>save</button></form>";
 const char HTTP_SCAN_LINK[] PROGMEM       = "<br/><div class=\"c\"><a href=\"/wifi\">Scan</a></div>";
 const char HTTP_SAVED[] PROGMEM           = "<div>Credentials Saved<br />Trying to connect ESP to network.<br />If it fails reconnect to AP to try again</div>";
+const char HTTP_ADHOC[] PROGMEM           = "<div>ESP will remain in AdHoc mode.</div>";
 const char HTTP_END[] PROGMEM             = "</div></body></html>";
 
 #define WIFI_MANAGER_MAX_PARAMS 10
@@ -64,6 +67,22 @@ class WiFiManagerParameter {
     friend class WiFiManager;
 };
 
+struct WiFiManagerConfig
+{
+  WiFiManagerConfig(): ssid(""), pass(""), connect(false), stayAdHoc(false) {}
+  String        ssid;
+  String        pass;
+  boolean       connect;
+  boolean       stayAdHoc;
+  IPAddress     ap_static_ip;
+  IPAddress     ap_static_gw;
+  IPAddress     ap_static_sn;
+  IPAddress     sta_static_ip;
+  IPAddress     sta_static_gw;
+  IPAddress     sta_static_sn;
+};
+
+typedef void(*_save_callback_t)(WiFiManagerConfig& config);
 
 class WiFiManager
 {
@@ -101,7 +120,7 @@ class WiFiManager
     //called when AP mode and config portal is started
     void          setAPCallback( void (*func)(WiFiManager*) );
     //called when settings have been changed and connection was successful
-    void          setSaveConfigCallback( void (*func)(void) );
+    void          setSaveConfigCallback( _save_callback_t cb );
     //adds a custom parameter
     void          addParameter(WiFiManagerParameter *p);
     //if this is set, it will exit after config, even if connection is unsucessful.
@@ -110,6 +129,8 @@ class WiFiManager
     //TODO
     //if this is set, customise style
     void          setCustomHeadElement(const char* element);
+
+    WiFiManagerConfig& config();
 
 
   private:
@@ -126,18 +147,12 @@ class WiFiManager
 
     const char*   _apName                 = "no-net";
     const char*   _apPassword             = NULL;
-    String        _ssid                   = "";
-    String        _pass                   = "";
+
     unsigned long _configPortalTimeout    = 0;
     unsigned long _connectTimeout         = 0;
     unsigned long _configPortalStart      = 0;
 
-    IPAddress     _ap_static_ip;
-    IPAddress     _ap_static_gw;
-    IPAddress     _ap_static_sn;
-    IPAddress     _sta_static_ip;
-    IPAddress     _sta_static_gw;
-    IPAddress     _sta_static_sn;
+    WiFiManagerConfig _config;
 
     int           _paramsCount            = 0;
     int           _minimumQuality         = -1;
@@ -160,6 +175,7 @@ class WiFiManager
     void          handleReset();
     void          handleNotFound();
     void          handle204();
+    void          handleAdHoc();
     boolean       captivePortal();
 
     // DNS server
@@ -170,11 +186,11 @@ class WiFiManager
     boolean       isIp(String str);
     String        toStringIp(IPAddress ip);
 
-    boolean       connect;
     boolean       _debug = true;
 
     void (*_apcallback)(WiFiManager*) = NULL;
-    void (*_savecallback)(void) = NULL;
+    _save_callback_t _savecallback = NULL;
+
 
     WiFiManagerParameter* _params[WIFI_MANAGER_MAX_PARAMS];
 
